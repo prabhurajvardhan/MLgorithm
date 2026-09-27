@@ -1,20 +1,19 @@
+
+from .normalizer import normalize_name
+
+
 def prepare(con):
     con.execute("""
-        CREATE TABLE IF NOT EXISTS normalized_name_index AS
+        CREATE OR REPLACE TABLE normalized_name_index AS
         SELECT
             entity_id,
-            regexp_replace(
-                lower(coalesce(business_name, '')),
-                '[^a-z0-9]',
-                '',
-                'g'
-            ) AS normalized_name
+            business_name
         FROM businesses
     """)
 
     con.execute("""
-        CREATE INDEX IF NOT EXISTS idx_normalized_name
-        ON normalized_name_index(normalized_name)
+        CREATE INDEX IF NOT EXISTS idx_normalized_entity
+        ON normalized_name_index(entity_id)
     """)
 
     con.execute("""
@@ -26,20 +25,47 @@ def prepare(con):
 
 
 def run_batch(con, start_row, end_row):
+    """
+    Normalized-name blocking.
+
+    Uses DuckDB normalization-compatible SQL for the common
+    normalization path. Python-level normalization is also
+    exposed through normalizer.py for feature generation.
+    """
+
     con.execute("""
         INSERT INTO normalized_candidates
+
         SELECT DISTINCT
             s.entity_id,
             n.entity_id
+
         FROM s1_work s
+
         JOIN normalized_name_index n
-          ON n.normalized_name =
-             regexp_replace(
+          ON regexp_replace(
                  lower(coalesce(s.business_name, '')),
                  '[^a-z0-9]',
                  '',
                  'g'
              )
-        WHERE s.row_id > ? AND s.row_id <= ?
-          AND length(n.normalized_name) >= 3
+             =
+             regexp_replace(
+                 lower(coalesce(n.business_name, '')),
+                 '[^a-z0-9]',
+                 '',
+                 'g'
+             )
+
+        WHERE s.row_id > ?
+          AND s.row_id <= ?
+
+          AND length(
+              regexp_replace(
+                  lower(coalesce(s.business_name, '')),
+                  '[^a-z0-9]',
+                  '',
+                  'g'
+              )
+          ) >= 3
     """, [start_row, end_row])
